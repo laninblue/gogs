@@ -8,12 +8,12 @@ import (
 	"container/list"
 	"path"
 
-	"github.com/gogits/git-module"
+	"github.com/gogs/git-module"
 
-	"github.com/gogits/gogs/models"
-	"github.com/gogits/gogs/pkg/context"
-	"github.com/gogits/gogs/pkg/setting"
-	"github.com/gogits/gogs/pkg/tool"
+	"github.com/gogs/gogs/models"
+	"github.com/gogs/gogs/pkg/context"
+	"github.com/gogs/gogs/pkg/setting"
+	"github.com/gogs/gogs/pkg/tool"
 )
 
 const (
@@ -45,6 +45,7 @@ func RenderIssueLinks(oldCommits *list.List, repoLink string) *list.List {
 func renderCommits(c *context.Context, filename string) {
 	c.Data["Title"] = c.Tr("repo.commits.commit_history") + " · " + c.Repo.Repository.FullName()
 	c.Data["PageIsCommits"] = true
+	c.Data["FileName"] = filename
 
 	page := c.QueryInt("page")
 	if page < 1 {
@@ -120,8 +121,8 @@ func FileHistory(c *context.Context) {
 }
 
 func Diff(c *context.Context) {
-	c.Data["PageIsDiff"] = true
-	c.Data["RequireHighlightJS"] = true
+	c.PageIs("Diff")
+	c.RequireHighlightJS()
 
 	userName := c.Repo.Owner.Name
 	repoName := c.Repo.Repository.Name
@@ -129,11 +130,7 @@ func Diff(c *context.Context) {
 
 	commit, err := c.Repo.GitRepo.GetCommit(commitID)
 	if err != nil {
-		if git.IsErrNotExist(err) {
-			c.Handle(404, "Repo.GitRepo.GetCommit", err)
-		} else {
-			c.Handle(500, "Repo.GitRepo.GetCommit", err)
-		}
+		c.NotFoundOrServerError("get commit by ID", git.IsErrNotExist, err)
 		return
 	}
 
@@ -141,7 +138,7 @@ func Diff(c *context.Context) {
 		commitID, setting.Git.MaxGitDiffLines,
 		setting.Git.MaxGitDiffLineCharacters, setting.Git.MaxGitDiffFiles)
 	if err != nil {
-		c.NotFoundOrServerError("GetDiffCommit", git.IsErrNotExist, err)
+		c.NotFoundOrServerError("get diff commit", git.IsErrNotExist, err)
 		return
 	}
 
@@ -150,7 +147,7 @@ func Diff(c *context.Context) {
 		sha, err := commit.ParentID(i)
 		parents[i] = sha.String()
 		if err != nil {
-			c.Handle(404, "repo.Diff", err)
+			c.NotFound()
 			return
 		}
 	}
@@ -160,12 +157,12 @@ func Diff(c *context.Context) {
 		return
 	}
 
+	c.Title(commit.Summary() + " · " + tool.ShortSHA1(commitID))
 	c.Data["CommitID"] = commitID
 	c.Data["IsSplitStyle"] = c.Query("style") == "split"
 	c.Data["Username"] = userName
 	c.Data["Reponame"] = repoName
 	c.Data["IsImageFile"] = commit.IsImageFile
-	c.Data["Title"] = commit.Summary() + " · " + tool.ShortSHA1(commitID)
 	c.Data["Commit"] = commit
 	c.Data["Author"] = models.ValidateCommitWithEmail(commit)
 	c.Data["Diff"] = diff
@@ -176,7 +173,7 @@ func Diff(c *context.Context) {
 		c.Data["BeforeSourcePath"] = setting.AppSubURL + "/" + path.Join(userName, repoName, "src", parents[0])
 	}
 	c.Data["RawPath"] = setting.AppSubURL + "/" + path.Join(userName, repoName, "raw", commitID)
-	c.HTML(200, DIFF)
+	c.Success(DIFF)
 }
 
 func RawDiff(c *context.Context) {

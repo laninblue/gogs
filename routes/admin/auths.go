@@ -6,16 +6,18 @@ package admin
 
 import (
 	"fmt"
+	"net/http"
+	"strings"
 
 	"github.com/Unknwon/com"
 	"github.com/go-xorm/core"
 	log "gopkg.in/clog.v1"
 
-	"github.com/gogits/gogs/models"
-	"github.com/gogits/gogs/pkg/auth/ldap"
-	"github.com/gogits/gogs/pkg/context"
-	"github.com/gogits/gogs/pkg/form"
-	"github.com/gogits/gogs/pkg/setting"
+	"github.com/gogs/gogs/models"
+	"github.com/gogs/gogs/pkg/auth/ldap"
+	"github.com/gogs/gogs/pkg/context"
+	"github.com/gogs/gogs/pkg/form"
+	"github.com/gogs/gogs/pkg/setting"
 )
 
 const (
@@ -25,19 +27,19 @@ const (
 )
 
 func Authentications(c *context.Context) {
-	c.Data["Title"] = c.Tr("admin.authentication")
-	c.Data["PageIsAdmin"] = true
-	c.Data["PageIsAdminAuthentications"] = true
+	c.Title("admin.authentication")
+	c.PageIs("Admin")
+	c.PageIs("AdminAuthentications")
 
 	var err error
 	c.Data["Sources"], err = models.LoginSources()
 	if err != nil {
-		c.Handle(500, "LoginSources", err)
+		c.ServerError("LoginSources", err)
 		return
 	}
 
 	c.Data["Total"] = models.CountLoginSources()
-	c.HTML(200, AUTHS)
+	c.Success(AUTHS)
 }
 
 type dropdownItem struct {
@@ -51,6 +53,7 @@ var (
 		{models.LoginNames[models.LOGIN_DLDAP], models.LOGIN_DLDAP},
 		{models.LoginNames[models.LOGIN_SMTP], models.LOGIN_SMTP},
 		{models.LoginNames[models.LOGIN_PAM], models.LOGIN_PAM},
+		{models.LoginNames[models.LOGIN_GITHUB], models.LOGIN_GITHUB},
 	}
 	securityProtocols = []dropdownItem{
 		{models.SecurityProtocolNames[ldap.SECURITY_PROTOCOL_UNENCRYPTED], ldap.SECURITY_PROTOCOL_UNENCRYPTED},
@@ -60,25 +63,25 @@ var (
 )
 
 func NewAuthSource(c *context.Context) {
-	c.Data["Title"] = c.Tr("admin.auths.new")
-	c.Data["PageIsAdmin"] = true
-	c.Data["PageIsAdminAuthentications"] = true
+	c.Title("admin.auths.new")
+	c.PageIs("Admin")
+	c.PageIs("AdminAuthentications")
 
 	c.Data["type"] = models.LOGIN_LDAP
 	c.Data["CurrentTypeName"] = models.LoginNames[models.LOGIN_LDAP]
 	c.Data["CurrentSecurityProtocol"] = models.SecurityProtocolNames[ldap.SECURITY_PROTOCOL_UNENCRYPTED]
 	c.Data["smtp_auth"] = "PLAIN"
 	c.Data["is_active"] = true
+	c.Data["is_default"] = true
 	c.Data["AuthSources"] = authSources
 	c.Data["SecurityProtocols"] = securityProtocols
 	c.Data["SMTPAuths"] = models.SMTPAuths
-	c.HTML(200, AUTH_NEW)
+	c.Success(AUTH_NEW)
 }
 
 func parseLDAPConfig(f form.Authentication) *models.LDAPConfig {
 	return &models.LDAPConfig{
 		Source: &ldap.Source{
-			Name:              f.Name,
 			Host:              f.Host,
 			Port:              f.Port,
 			SecurityProtocol:  ldap.SecurityProtocol(f.SecurityProtocol),
@@ -99,7 +102,6 @@ func parseLDAPConfig(f form.Authentication) *models.LDAPConfig {
 			GroupMemberUID:    f.GroupMemberUID,
 			UserUID:           f.UserUID,
 			AdminFilter:       f.AdminFilter,
-			Enabled:           true,
 		},
 	}
 }
@@ -116,9 +118,9 @@ func parseSMTPConfig(f form.Authentication) *models.SMTPConfig {
 }
 
 func NewAuthSourcePost(c *context.Context, f form.Authentication) {
-	c.Data["Title"] = c.Tr("admin.auths.new")
-	c.Data["PageIsAdmin"] = true
-	c.Data["PageIsAdminAuthentications"] = true
+	c.Title("admin.auths.new")
+	c.PageIs("Admin")
+	c.PageIs("AdminAuthentications")
 
 	c.Data["CurrentTypeName"] = models.LoginNames[models.LoginType(f.Type)]
 	c.Data["CurrentSecurityProtocol"] = models.SecurityProtocolNames[ldap.SecurityProtocol(f.SecurityProtocol)]
@@ -139,14 +141,18 @@ func NewAuthSourcePost(c *context.Context, f form.Authentication) {
 		config = &models.PAMConfig{
 			ServiceName: f.PAMServiceName,
 		}
+	case models.LOGIN_GITHUB:
+		config = &models.GitHubConfig{
+			APIEndpoint: strings.TrimSuffix(f.GitHubAPIEndpoint, "/") + "/",
+		}
 	default:
-		c.Error(400)
+		c.Error(http.StatusBadRequest)
 		return
 	}
 	c.Data["HasTLS"] = hasTLS
 
 	if c.HasError() {
-		c.HTML(200, AUTH_NEW)
+		c.Success(AUTH_NEW)
 		return
 	}
 
@@ -154,13 +160,14 @@ func NewAuthSourcePost(c *context.Context, f form.Authentication) {
 		Type:      models.LoginType(f.Type),
 		Name:      f.Name,
 		IsActived: f.IsActive,
+		IsDefault: f.IsDefault,
 		Cfg:       config,
 	}); err != nil {
 		if models.IsErrLoginSourceAlreadyExist(err) {
-			c.Data["Err_Name"] = true
+			c.FormErr("Name")
 			c.RenderWithErr(c.Tr("admin.auths.login_source_exist", err.(models.ErrLoginSourceAlreadyExist).Name), AUTH_NEW, f)
 		} else {
-			c.Handle(500, "CreateSource", err)
+			c.ServerError("CreateSource", err)
 		}
 		return
 	}
@@ -172,41 +179,41 @@ func NewAuthSourcePost(c *context.Context, f form.Authentication) {
 }
 
 func EditAuthSource(c *context.Context) {
-	c.Data["Title"] = c.Tr("admin.auths.edit")
-	c.Data["PageIsAdmin"] = true
-	c.Data["PageIsAdminAuthentications"] = true
+	c.Title("admin.auths.edit")
+	c.PageIs("Admin")
+	c.PageIs("AdminAuthentications")
 
 	c.Data["SecurityProtocols"] = securityProtocols
 	c.Data["SMTPAuths"] = models.SMTPAuths
 
 	source, err := models.GetLoginSourceByID(c.ParamsInt64(":authid"))
 	if err != nil {
-		c.Handle(500, "GetLoginSourceByID", err)
+		c.ServerError("GetLoginSourceByID", err)
 		return
 	}
 	c.Data["Source"] = source
 	c.Data["HasTLS"] = source.HasTLS()
 
-	c.HTML(200, AUTH_EDIT)
+	c.Success(AUTH_EDIT)
 }
 
 func EditAuthSourcePost(c *context.Context, f form.Authentication) {
-	c.Data["Title"] = c.Tr("admin.auths.edit")
-	c.Data["PageIsAdmin"] = true
-	c.Data["PageIsAdminAuthentications"] = true
+	c.Title("admin.auths.edit")
+	c.PageIs("Admin")
+	c.PageIs("AdminAuthentications")
 
 	c.Data["SMTPAuths"] = models.SMTPAuths
 
 	source, err := models.GetLoginSourceByID(c.ParamsInt64(":authid"))
 	if err != nil {
-		c.Handle(500, "GetLoginSourceByID", err)
+		c.ServerError("GetLoginSourceByID", err)
 		return
 	}
 	c.Data["Source"] = source
 	c.Data["HasTLS"] = source.HasTLS()
 
 	if c.HasError() {
-		c.HTML(200, AUTH_EDIT)
+		c.Success(AUTH_EDIT)
 		return
 	}
 
@@ -220,19 +227,25 @@ func EditAuthSourcePost(c *context.Context, f form.Authentication) {
 		config = &models.PAMConfig{
 			ServiceName: f.PAMServiceName,
 		}
+	case models.LOGIN_GITHUB:
+		config = &models.GitHubConfig{
+			APIEndpoint: strings.TrimSuffix(f.GitHubAPIEndpoint, "/") + "/",
+		}
 	default:
-		c.Error(400)
+		c.Error(http.StatusBadRequest)
 		return
 	}
 
 	source.Name = f.Name
 	source.IsActived = f.IsActive
+	source.IsDefault = f.IsDefault
 	source.Cfg = config
-	if err := models.UpdateSource(source); err != nil {
-		c.Handle(500, "UpdateSource", err)
+	if err := models.UpdateLoginSource(source); err != nil {
+		c.ServerError("UpdateLoginSource", err)
 		return
 	}
-	log.Trace("Authentication changed by admin(%s): %d", c.User.Name, source.ID)
+
+	log.Trace("Authentication changed by admin '%s': %d", c.User.Name, source.ID)
 
 	c.Flash.Success(c.Tr("admin.auths.update_success"))
 	c.Redirect(setting.AppSubURL + "/admin/auths/" + com.ToStr(f.ID))
@@ -241,7 +254,7 @@ func EditAuthSourcePost(c *context.Context, f form.Authentication) {
 func DeleteAuthSource(c *context.Context) {
 	source, err := models.GetLoginSourceByID(c.ParamsInt64(":authid"))
 	if err != nil {
-		c.Handle(500, "GetLoginSourceByID", err)
+		c.ServerError("GetLoginSourceByID", err)
 		return
 	}
 
@@ -251,7 +264,7 @@ func DeleteAuthSource(c *context.Context) {
 		} else {
 			c.Flash.Error(fmt.Sprintf("DeleteSource: %v", err))
 		}
-		c.JSON(200, map[string]interface{}{
+		c.JSONSuccess(map[string]interface{}{
 			"redirect": setting.AppSubURL + "/admin/auths/" + c.Params(":authid"),
 		})
 		return
@@ -259,7 +272,7 @@ func DeleteAuthSource(c *context.Context) {
 	log.Trace("Authentication deleted by admin(%s): %d", c.User.Name, source.ID)
 
 	c.Flash.Success(c.Tr("admin.auths.deletion_success"))
-	c.JSON(200, map[string]interface{}{
+	c.JSONSuccess(map[string]interface{}{
 		"redirect": setting.AppSubURL + "/admin/auths",
 	})
 }

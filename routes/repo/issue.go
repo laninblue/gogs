@@ -17,13 +17,14 @@ import (
 	"github.com/Unknwon/paginater"
 	log "gopkg.in/clog.v1"
 
-	"github.com/gogits/gogs/models"
-	"github.com/gogits/gogs/models/errors"
-	"github.com/gogits/gogs/pkg/context"
-	"github.com/gogits/gogs/pkg/form"
-	"github.com/gogits/gogs/pkg/markup"
-	"github.com/gogits/gogs/pkg/setting"
-	"github.com/gogits/gogs/pkg/tool"
+	"github.com/gogs/gogs/models"
+	"github.com/gogs/gogs/models/errors"
+	"github.com/gogs/gogs/pkg/context"
+	"github.com/gogs/gogs/pkg/form"
+	"github.com/gogs/gogs/pkg/markup"
+	"github.com/gogs/gogs/pkg/setting"
+	"github.com/gogs/gogs/pkg/template"
+	"github.com/gogs/gogs/pkg/tool"
 )
 
 const (
@@ -344,6 +345,8 @@ func NewIssue(c *context.Context) {
 	c.Data["PageIsIssueList"] = true
 	c.Data["RequireHighlightJS"] = true
 	c.Data["RequireSimpleMDE"] = true
+	c.Data["title"] = c.Query("title")
+	c.Data["content"] = c.Query("content")
 	setTemplateIfExists(c, ISSUE_TEMPLATE_KEY, IssueTemplateCandidates)
 	renderAttachmentSettings(c)
 
@@ -642,10 +645,22 @@ func viewIssue(c *context.Context, isPullList bool) {
 
 	if issue.IsPull && issue.PullRequest.HasMerged {
 		pull := issue.PullRequest
-		c.Data["IsPullBranchDeletable"] = pull.BaseRepoID == pull.HeadRepoID &&
-			c.Repo.IsWriter() && c.Repo.GitRepo.IsBranchExist(pull.HeadBranch)
+		branchProtected := false
+		protectBranch, err := models.GetProtectBranchOfRepoByName(pull.BaseRepoID, pull.HeadBranch)
+		if err != nil {
+			if !errors.IsErrBranchNotExist(err) {
+				c.ServerError("GetProtectBranchOfRepoByName", err)
+				return
+			}
+		} else {
+			branchProtected = protectBranch.Protected
+		}
 
-		deleteBranchUrl := c.Repo.RepoLink + "/branches/delete/" + pull.HeadBranch
+		c.Data["IsPullBranchDeletable"] = pull.BaseRepoID == pull.HeadRepoID &&
+			c.Repo.IsWriter() && c.Repo.GitRepo.IsBranchExist(pull.HeadBranch) &&
+			!branchProtected
+
+		deleteBranchUrl := template.EscapePound(c.Repo.RepoLink + "/branches/delete/" + pull.HeadBranch)
 		c.Data["DeleteBranchLink"] = fmt.Sprintf("%s?commit=%s&redirect_to=%s", deleteBranchUrl, pull.MergedCommitID, c.Data["Link"])
 	}
 
@@ -888,7 +903,7 @@ func NewComment(c *context.Context, f form.CreateComment) {
 			typeName = "pulls"
 		}
 		if comment != nil {
-			c.Redirect(fmt.Sprintf("%s/%s/%d#%s", c.Repo.RepoLink, typeName, issue.Index, comment.HashTag()))
+			c.RawRedirect(fmt.Sprintf("%s/%s/%d#%s", c.Repo.RepoLink, typeName, issue.Index, comment.HashTag()))
 		} else {
 			c.Redirect(fmt.Sprintf("%s/%s/%d", c.Repo.RepoLink, typeName, issue.Index))
 		}
