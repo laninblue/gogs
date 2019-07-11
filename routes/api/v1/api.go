@@ -5,22 +5,23 @@
 package v1
 
 import (
+	"net/http"
 	"strings"
 
 	"github.com/go-macaron/binding"
 	"gopkg.in/macaron.v1"
 
-	api "github.com/gogits/go-gogs-client"
+	api "github.com/gogs/go-gogs-client"
 
-	"github.com/gogits/gogs/models"
-	"github.com/gogits/gogs/models/errors"
-	"github.com/gogits/gogs/pkg/context"
-	"github.com/gogits/gogs/pkg/form"
-	"github.com/gogits/gogs/routes/api/v1/admin"
-	"github.com/gogits/gogs/routes/api/v1/misc"
-	"github.com/gogits/gogs/routes/api/v1/org"
-	"github.com/gogits/gogs/routes/api/v1/repo"
-	"github.com/gogits/gogs/routes/api/v1/user"
+	"github.com/gogs/gogs/models"
+	"github.com/gogs/gogs/models/errors"
+	"github.com/gogs/gogs/pkg/context"
+	"github.com/gogs/gogs/pkg/form"
+	"github.com/gogs/gogs/routes/api/v1/admin"
+	"github.com/gogs/gogs/routes/api/v1/misc"
+	"github.com/gogs/gogs/routes/api/v1/org"
+	"github.com/gogs/gogs/routes/api/v1/repo"
+	"github.com/gogs/gogs/routes/api/v1/user"
 )
 
 func repoAssignment() macaron.Handler {
@@ -39,43 +40,34 @@ func repoAssignment() macaron.Handler {
 		} else {
 			owner, err = models.GetUserByName(userName)
 			if err != nil {
-				if errors.IsUserNotExist(err) {
-					c.Status(404)
-				} else {
-					c.Error(500, "GetUserByName", err)
-				}
+				c.NotFoundOrServerError("GetUserByName", errors.IsUserNotExist, err)
 				return
 			}
 		}
 		c.Repo.Owner = owner
 
-		// Get repository.
 		repo, err := models.GetRepositoryByName(owner.ID, repoName)
 		if err != nil {
-			if errors.IsRepoNotExist(err) {
-				c.Status(404)
-			} else {
-				c.Error(500, "GetRepositoryByName", err)
-			}
+			c.NotFoundOrServerError("GetRepositoryByName", errors.IsRepoNotExist, err)
 			return
 		} else if err = repo.GetOwner(); err != nil {
-			c.Error(500, "GetOwner", err)
+			c.ServerError("GetOwner", err)
 			return
 		}
 
-		if c.IsLogged && c.User.IsAdmin {
+		if c.IsTokenAuth && c.User.IsAdmin {
 			c.Repo.AccessMode = models.ACCESS_MODE_OWNER
 		} else {
-			mode, err := models.AccessLevel(c.User.ID, repo)
+			mode, err := models.AccessLevel(c.UserID(), repo)
 			if err != nil {
-				c.Error(500, "AccessLevel", err)
+				c.ServerError("AccessLevel", err)
 				return
 			}
 			c.Repo.AccessMode = mode
 		}
 
 		if !c.Repo.HasAccess() {
-			c.Status(404)
+			c.NotFound()
 			return
 		}
 
@@ -86,8 +78,8 @@ func repoAssignment() macaron.Handler {
 // Contexter middleware already checks token for user sign in process.
 func reqToken() macaron.Handler {
 	return func(c *context.Context) {
-		if !c.IsLogged {
-			c.Error(401)
+		if !c.IsTokenAuth {
+			c.Error(http.StatusUnauthorized)
 			return
 		}
 	}
@@ -96,7 +88,7 @@ func reqToken() macaron.Handler {
 func reqBasicAuth() macaron.Handler {
 	return func(c *context.Context) {
 		if !c.IsBasicAuth {
-			c.Error(401)
+			c.Error(http.StatusUnauthorized)
 			return
 		}
 	}
@@ -105,7 +97,7 @@ func reqBasicAuth() macaron.Handler {
 func reqAdmin() macaron.Handler {
 	return func(c *context.Context) {
 		if !c.IsLogged || !c.User.IsAdmin {
-			c.Error(403)
+			c.Error(http.StatusForbidden)
 			return
 		}
 	}
@@ -114,7 +106,7 @@ func reqAdmin() macaron.Handler {
 func reqRepoWriter() macaron.Handler {
 	return func(c *context.Context) {
 		if !c.Repo.IsWriter() {
-			c.Error(403)
+			c.Error(http.StatusForbidden)
 			return
 		}
 	}
@@ -138,11 +130,7 @@ func orgAssignment(args ...bool) macaron.Handler {
 		if assignOrg {
 			c.Org.Organization, err = models.GetUserByName(c.Params(":orgname"))
 			if err != nil {
-				if errors.IsUserNotExist(err) {
-					c.Status(404)
-				} else {
-					c.Error(500, "GetUserByName", err)
-				}
+				c.NotFoundOrServerError("GetUserByName", errors.IsUserNotExist, err)
 				return
 			}
 		}
@@ -150,11 +138,7 @@ func orgAssignment(args ...bool) macaron.Handler {
 		if assignTeam {
 			c.Org.Team, err = models.GetTeamByID(c.ParamsInt64(":teamid"))
 			if err != nil {
-				if errors.IsUserNotExist(err) {
-					c.Status(404)
-				} else {
-					c.Error(500, "GetTeamById", err)
-				}
+				c.NotFoundOrServerError("GetTeamByID", errors.IsTeamNotExist, err)
 				return
 			}
 		}
@@ -163,7 +147,7 @@ func orgAssignment(args ...bool) macaron.Handler {
 
 func mustEnableIssues(c *context.APIContext) {
 	if !c.Repo.Repository.EnableIssues || c.Repo.Repository.EnableExternalTracker {
-		c.Status(404)
+		c.NotFound()
 		return
 	}
 }
@@ -238,12 +222,13 @@ func RegisterRoutes(m *macaron.Macaron) {
 
 		m.Group("/repos", func() {
 			m.Get("/search", repo.Search)
+
+			m.Get("/:username/:reponame", repoAssignment(), repo.Get)
 		})
 
 		m.Group("/repos", func() {
 			m.Post("/migrate", bind(form.MigrateRepo{}), repo.Migrate)
-			m.Combo("/:username/:reponame", repoAssignment()).Get(repo.Get).
-				Delete(repo.Delete)
+			m.Delete("/:username/:reponame", repoAssignment(), repo.Delete)
 
 			m.Group("/:username/:reponame", func() {
 				m.Group("/hooks", func() {
@@ -264,6 +249,12 @@ func RegisterRoutes(m *macaron.Macaron) {
 					m.Get("", repo.ListBranches)
 					m.Get("/*", repo.GetBranch)
 				})
+
+				m.Group("/commits", func() {
+					m.Get("/:sha", repo.GetSingleCommit)
+					m.Get("/*", repo.GetReferenceSHA)
+				})
+
 				m.Group("/keys", func() {
 					m.Combo("").Get(repo.ListDeployKeys).
 						Post(bind(api.CreateKeyOption{}), repo.CreateDeployKey)
@@ -308,6 +299,8 @@ func RegisterRoutes(m *macaron.Macaron) {
 						Patch(reqRepoWriter(), bind(api.EditMilestoneOption{}), repo.EditMilestone).
 						Delete(reqRepoWriter(), repo.DeleteMilestone)
 				})
+
+				m.Patch("/issue-tracker", bind(api.EditIssueTrackerOption{}), repo.IssueTracker)
 				m.Post("/mirror-sync", repo.MirrorSync)
 				m.Get("/editorconfig/:filename", context.RepoRef(), repo.GetEditorconfig)
 			}, repoAssignment())
@@ -316,7 +309,8 @@ func RegisterRoutes(m *macaron.Macaron) {
 		m.Get("/issues", reqToken(), repo.ListUserIssues)
 
 		// Organizations
-		m.Get("/user/orgs", reqToken(), org.ListMyOrgs)
+		m.Combo("/user/orgs", reqToken()).Get(org.ListMyOrgs).Post(bind(api.CreateOrgOption{}), org.CreateMyOrg)
+
 		m.Get("/users/:username/orgs", org.ListUserOrgs)
 		m.Group("/orgs/:orgname", func() {
 			m.Combo("").Get(org.Get).Patch(bind(api.EditOrgOption{}), org.Edit)
@@ -324,7 +318,7 @@ func RegisterRoutes(m *macaron.Macaron) {
 		}, orgAssignment(true))
 
 		m.Any("/*", func(c *context.Context) {
-			c.Error(404)
+			c.NotFound()
 		})
 
 		m.Group("/admin", func() {

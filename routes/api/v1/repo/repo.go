@@ -9,22 +9,23 @@ import (
 
 	log "gopkg.in/clog.v1"
 
-	api "github.com/gogits/go-gogs-client"
+	api "github.com/gogs/go-gogs-client"
 
-	"github.com/gogits/gogs/models"
-	"github.com/gogits/gogs/models/errors"
-	"github.com/gogits/gogs/pkg/context"
-	"github.com/gogits/gogs/pkg/form"
-	"github.com/gogits/gogs/pkg/setting"
-	"github.com/gogits/gogs/routes/api/v1/convert"
+	"github.com/gogs/gogs/models"
+	"github.com/gogs/gogs/models/errors"
+	"github.com/gogs/gogs/pkg/context"
+	"github.com/gogs/gogs/pkg/form"
+	"github.com/gogs/gogs/pkg/setting"
+	"github.com/gogs/gogs/routes/api/v1/convert"
 )
 
-// https://github.com/gogits/go-gogs-client/wiki/Repositories#search-repositories
+// https://github.com/gogs/go-gogs-client/wiki/Repositories#search-repositories
 func Search(c *context.APIContext) {
 	opts := &models.SearchRepoOptions{
 		Keyword:  path.Base(c.Query("q")),
 		OwnerID:  c.QueryInt64("uid"),
 		PageSize: convert.ToCorrectPageSize(c.QueryInt("limit")),
+		Page:     c.QueryInt("page"),
 	}
 
 	// Check visibility.
@@ -69,7 +70,7 @@ func Search(c *context.APIContext) {
 		results[i] = repos[i].APIFormat(nil)
 	}
 
-	c.SetLinkHeader(int(count), setting.API.MaxResponseItems)
+	c.SetLinkHeader(int(count), opts.PageSize)
 	c.JSON(200, map[string]interface{}{
 		"ok":   true,
 		"data": results,
@@ -182,7 +183,7 @@ func CreateUserRepo(c *context.APIContext, owner *models.User, opt api.CreateRep
 	c.JSON(201, repo.APIFormat(&api.Permission{true, true, true}))
 }
 
-// https://github.com/gogits/go-gogs-client/wiki/Repositories#create
+// https://github.com/gogs/go-gogs-client/wiki/Repositories#create
 func Create(c *context.APIContext, opt api.CreateRepoOption) {
 	// Shouldn't reach this condition, but just in case.
 	if c.User.IsOrganization() {
@@ -210,7 +211,7 @@ func CreateOrgRepo(c *context.APIContext, opt api.CreateRepoOption) {
 	CreateUserRepo(c, org, opt)
 }
 
-// https://github.com/gogits/go-gogs-client/wiki/Repositories#migrate
+// https://github.com/gogs/go-gogs-client/wiki/Repositories#migrate
 func Migrate(c *context.APIContext, f form.MigrateRepo) {
 	ctxUser := c.User
 	// Not equal means context user is an organization,
@@ -290,6 +291,7 @@ func Migrate(c *context.APIContext, f form.MigrateRepo) {
 	c.JSON(201, repo.APIFormat(&api.Permission{true, true, true}))
 }
 
+// FIXME: Inject to *context.APIContext
 func parseOwnerAndRepo(c *context.APIContext) (*models.User, *models.Repository) {
 	owner, err := models.GetUserByName(c.Params(":username"))
 	if err != nil {
@@ -314,7 +316,7 @@ func parseOwnerAndRepo(c *context.APIContext) (*models.User, *models.Repository)
 	return owner, repo
 }
 
-// https://github.com/gogits/go-gogs-client/wiki/Repositories#get
+// https://github.com/gogs/go-gogs-client/wiki/Repositories#get
 func Get(c *context.APIContext) {
 	_, repo := parseOwnerAndRepo(c)
 	if c.Written() {
@@ -328,7 +330,7 @@ func Get(c *context.APIContext) {
 	}))
 }
 
-// https://github.com/gogits/go-gogs-client/wiki/Repositories#delete
+// https://github.com/gogs/go-gogs-client/wiki/Repositories#delete
 func Delete(c *context.APIContext) {
 	owner, repo := parseOwnerAndRepo(c)
 	if c.Written() {
@@ -370,6 +372,36 @@ func ListForks(c *context.APIContext) {
 	}
 
 	c.JSON(200, &apiForks)
+}
+
+func IssueTracker(c *context.APIContext, form api.EditIssueTrackerOption) {
+	_, repo := parseOwnerAndRepo(c)
+	if c.Written() {
+		return
+	}
+
+	if form.EnableIssues != nil {
+		repo.EnableIssues = *form.EnableIssues
+	}
+	if form.EnableExternalTracker != nil {
+		repo.EnableExternalTracker = *form.EnableExternalTracker
+	}
+	if form.ExternalTrackerURL != nil {
+		repo.ExternalTrackerURL = *form.ExternalTrackerURL
+	}
+	if form.TrackerURLFormat != nil {
+		repo.ExternalTrackerFormat = *form.TrackerURLFormat
+	}
+	if form.TrackerIssueStyle != nil {
+		repo.ExternalTrackerStyle = *form.TrackerIssueStyle
+	}
+
+	if err := models.UpdateRepository(repo, false); err != nil {
+		c.ServerError("UpdateRepository", err)
+		return
+	}
+
+	c.NoContent()
 }
 
 func MirrorSync(c *context.APIContext) {

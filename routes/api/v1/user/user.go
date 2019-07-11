@@ -7,11 +7,12 @@ package user
 import (
 	"github.com/Unknwon/com"
 
-	api "github.com/gogits/go-gogs-client"
+	api "github.com/gogs/go-gogs-client"
 
-	"github.com/gogits/gogs/models"
-	"github.com/gogits/gogs/models/errors"
-	"github.com/gogits/gogs/pkg/context"
+	"github.com/gogs/gogs/models"
+	"github.com/gogs/gogs/models/errors"
+	"github.com/gogs/gogs/pkg/context"
+	"github.com/gogs/gogs/pkg/markup"
 )
 
 func Search(c *context.APIContext) {
@@ -39,7 +40,7 @@ func Search(c *context.APIContext) {
 			ID:        users[i].ID,
 			UserName:  users[i].Name,
 			AvatarUrl: users[i].AvatarLink(),
-			FullName:  users[i].FullName,
+			FullName:  markup.Sanitize(users[i].FullName),
 		}
 		if c.IsLogged {
 			results[i].Email = users[i].Email
